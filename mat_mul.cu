@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <time.h>
 
  void add_vec(float* A, float* B, float* C, int n) {
     for (int i = 0; i < n; i++) {
@@ -164,9 +165,10 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     cudaMemcpy(A_d, A, A_size, cudaMemcpyHostToDevice); 
     cudaMemcpy(B_d, B, B_size, cudaMemcpyHostToDevice); 
 
-    f<<<dim3(3,3), dim3(1, 1)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
-
+    time_t f_start = time(NULL);
+    f<<<dim3(A_rows, B_cols), dim3(1, 1)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
     cudaDeviceSynchronize(); 
+    time_t f_time = time(NULL) - f_start;
 
     cudaMemcpy(C_h_f, C_d_f, C_size, cudaMemcpyDeviceToHost); 
     cudaFree(C_d_f);
@@ -174,6 +176,7 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     if (!matrices_are_equal(C_ref, C_h_f, A_rows, B_cols, A_rows, B_cols)) {
         printf("kernel f is wrong!\n");
     }
+    print_matrix(C_h_f, A_rows, B_cols);
 
     free(C_h_f);
 
@@ -184,58 +187,24 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     float* C_d_g= allocate_matrix(A_rows, B_cols);
     cudaMalloc(&C_d_g, C_size);
 
-    g<<<dim3(3,3), dim3(1, 1)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
+    time_t g_start = time(NULL);
+    g<<<dim3(A_rows, A_cols), dim3(1, 1)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
     cudaDeviceSynchronize(); 
+    time_t g_time = time(NULL) - g_start;
 
     cudaMemcpy(C_h_g, C_d_g, C_size, cudaMemcpyDeviceToHost); 
     cudaFree(C_d_g);
     if (!matrices_are_equal(C_ref, C_h_g, A_rows, B_cols, A_rows, B_cols)) {
         printf("kernel g is wrong!\n");
     }
+    print_matrix(C_h_g, A_rows, B_cols);
     free(C_h_g);
+
+    printf("kernel f run time: %d\n", f_time);
+    printf("kernel g run time: %d\n", g_time);
 }
 
 int main() {
-    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 3, 3, 3);
-
-//    float A[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-//    float B[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9}; 
-//    float* C = (float*) malloc(9 * sizeof(float)); 
-
-//    print_matrix(A, 3, 3); 
-//    print_matrix(B, 3, 3); 
-//    mat_mul(A, B, C, 3, 3, 3);
-//    print_matrix(C, 3, 3); 
-
-
-
-    // test kernel
-//    float* C_h = (float*) malloc(9 * sizeof(float)); 
-    // set up on-device variables
-    // float* A_d;
-    // float* B_d; 
-    // float* C_d;
-    // // allocate memory on device
-    // cudaMalloc((void**) &A_d, 9 * sizeof(float));
-    // cudaMalloc((void**) &B_d, 9 * sizeof(float));
-    // cudaMalloc((void**) &C_d, 9 * sizeof(float));
-    // // copy data from host to device
-    // //      target, source, size, direction
-    // cudaMemcpy(A_d, A, 9 * sizeof(float), cudaMemcpyHostToDevice);
-    // cudaMemcpy(B_d, B, 9 * sizeof(float), cudaMemcpyHostToDevice);
-    // // invoke kernel
-    // mat_mul_knl_tiled<<<dim3(3, 3), dim3(1, 1)>>>(A_d, B_d, C_d, 3, 3, 3);
-    // // waith for kernel to finish
-    // cudaDeviceSynchronize();
-    // // move data back to host}
-    // cudaMemcpy(C_h, C_d, 9 * sizeof(float), cudaMemcpyDeviceToHost);
-    // // free data on device
-
-    // print_matrix(C, 3, 3);
-    // print_matrix(C_h, 3, 3);
-
-    // assert(matrices_are_equal(C, C_h, 3, 3, 3, 3));
-    // cudaFree(A_d);
-    // cudaFree(B_d);
-    // cudaFree(C_d);
+    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 6, 6, 6);
 }
+

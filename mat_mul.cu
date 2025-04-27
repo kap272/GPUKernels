@@ -91,6 +91,47 @@ __global__ void mat_mul_knl_naive(float* A, float* B, float* C, int A_rows, int 
     }
 }
 
+#define TILE_WIDTH 1 
+__global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols) {
+    // like in the naive kernel, each thread will be responsible for a single element of C
+    float C_val = 0.0;
+    // each tile corresponds 1-1 to a block
+    int row = blockIdx.y * TILE_WIDTH + threadIdx.y; 
+    int col = blockIdx.x * TILE_WIDTH + threadIdx.x; 
+
+    if (row >= A_rows || col >= B_cols) {
+        return; 
+    }
+
+    __shared__ float A_tile[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float B_tile[TILE_WIDTH][TILE_WIDTH];
+
+    // loop across inner dimension in strides of the TILE_WIDTH
+    // we're concerned with the row'th row of A and the col'th column of B so when 
+    // we loop over the inner dimension, we vary column/row
+    int A_tile_col = 0;
+    int B_tile_row = 0;
+    for (int k = 0; k <= ((A_cols - 1)/TILE_WIDTH); k++) {
+        // fill up the current tile with elements of A and B 
+        A_tile_col =  k * TILE_WIDTH + threadIdx.x;
+        B_tile_row =  TILE_WIDTH * k + threadIdx.y;
+        // TODO: this should happen in a separate loop to cut down on ifs
+        if (A_tile_col < A_cols) {
+            A_tile[threadIdx.y][threadIdx.x] = A[row * A_cols + A_tile_col];
+        }
+        if (B_tile_row < A_cols) {
+            B_tile[threadIdx.y][threadIdx.x] = B[B_tile_row * B_cols + col];
+        }
+        __syncthreads();
+        // at this point all threads in the block have filled up a square tile
+        for (int i= 0; i < TILE_WIDTH; i++) {
+            C_val += A_tile[threadIdx.y][i] * B_tile[i][threadIdx.x];
+        }
+        __syncthreads();
+    } 
+    C[row * B_cols + col] = C_val;
+}
+
 
 int main() {
     float A[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
@@ -119,7 +160,7 @@ int main() {
     cudaMemcpy(A_d, A, 9 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(B_d, B, 9 * sizeof(float), cudaMemcpyHostToDevice);
     // invoke kernel
-    mat_mul_knl_naive<<<dim3(3, 3), dim3(1, 1)>>>(A_d, B_d, C_d, 3, 3, 3);
+    mat_mul_knl_tiled<<<dim3(3, 3), dim3(1, 1)>>>(A_d, B_d, C_d, 3, 3, 3);
     // waith for kernel to finish
     cudaDeviceSynchronize();
     // move data back to host}

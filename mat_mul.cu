@@ -132,8 +132,9 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
         __syncthreads();
         // at this point all threads in the block have filled up a square tile
         for (int i = 0; i < TILE_WIDTH; i++) {
-            int tiled_inner_idx = k * TILE_WIDTH + i;
+            C_val += A_tile[threadIdx.y][i] * B_tile[i][threadIdx.x];
         }
+
         __syncthreads();
     } 
 
@@ -154,10 +155,10 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     float* C_ref = allocate_matrix(A_rows, B_cols);
 
     // establish ground truth
-    print_matrix(A, A_rows, A_cols);
-    print_matrix(B, A_cols, B_cols);
+  //  print_matrix(A, A_rows, A_cols);
+   // print_matrix(B, A_cols, B_cols);
     mat_mul(A, B, C_ref, A_rows, A_cols, B_cols);
-    print_matrix(C_ref, A_rows, B_cols);
+    //print_matrix(C_ref, A_rows, B_cols);
 
     // run kernel f
     float* C_h_f = allocate_matrix(A_rows, B_cols);
@@ -186,7 +187,7 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
         printf("kernel f is wrong!\n");
     }
     printf("f result: \n");
-    print_matrix(C_h_f, A_rows, B_cols);
+//    print_matrix(C_h_f, A_rows, B_cols);
 
     free(C_h_f);
 
@@ -206,7 +207,7 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     }
     cudaFree(C_d_g);
     printf("g result: \n");
-    print_matrix(C_h_g, A_rows, B_cols);
+//    print_matrix(C_h_g, A_rows, B_cols);
     free(C_h_g);
 
     printf("kernel f run time: %d\n", f_time);
@@ -219,6 +220,6 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
 }
 
 int main() {
-    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 6, 6, 6);
+    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 102, 300, 102);
 }
 

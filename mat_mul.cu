@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <time.h>
 
  void add_vec(float* A, float* B, float* C, int n) {
     for (int i = 0; i < n; i++) {
@@ -91,7 +92,7 @@ __global__ void mat_mul_knl_naive(float* A, float* B, float* C, int A_rows, int 
     }
 }
 
-#define TILE_WIDTH 1 
+#define TILE_WIDTH 3 
 __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols) {
     // like in the naive kernel, each thread will be responsible for a single element of C
     float C_val = 0.0;
@@ -111,67 +112,114 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
     // we loop over the inner dimension, we vary column/row
     int A_tile_col = 0;
     int B_tile_row = 0;
-    for (int k = 0; k <= ((A_cols - 1)/TILE_WIDTH); k++) {
+    for (int k = 0; k < ((A_cols + TILE_WIDTH- 1)/TILE_WIDTH); k++) {
         // fill up the current tile with elements of A and B 
         A_tile_col =  k * TILE_WIDTH + threadIdx.x;
         B_tile_row =  TILE_WIDTH * k + threadIdx.y;
         // TODO: this should happen in a separate loop to cut down on ifs
         if (A_tile_col < A_cols) {
             A_tile[threadIdx.y][threadIdx.x] = A[row * A_cols + A_tile_col];
+        } else {
+            A_tile[threadIdx.y][threadIdx.x] = 0.0; 
         }
+
         if (B_tile_row < A_cols) {
             B_tile[threadIdx.y][threadIdx.x] = B[B_tile_row * B_cols + col];
+        } else {
+            B_tile[threadIdx.y][threadIdx.x] = 0.0; 
         }
+
         __syncthreads();
         // at this point all threads in the block have filled up a square tile
-        for (int i= 0; i < TILE_WIDTH; i++) {
+        for (int i = 0; i < TILE_WIDTH; i++) {
             C_val += A_tile[threadIdx.y][i] * B_tile[i][threadIdx.x];
         }
+
         __syncthreads();
     } 
+
     C[row * B_cols + col] = C_val;
 }
 
 
-int main() {
-    float A[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-    float B[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9}; 
-    float* C = (float*) malloc(9 * sizeof(float)); 
+typedef void (*mat_mul_func)(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols); 
 
-//    print_matrix(A, 3, 3); 
-//    print_matrix(B, 3, 3); 
-    mat_mul(A, B, C, 3, 3, 3);
-//    print_matrix(C, 3, 3); 
+void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_cols, int B_cols) {
+    int A_size = sizeof(float) * A_rows * A_cols;
+    int B_size = sizeof(float) * A_cols * B_cols;
+    int C_size = sizeof(float) * A_rows * B_cols;
 
+    float* A = generate_random_matrix(A_rows, A_cols); 
+    float* B = generate_random_matrix(A_cols, B_cols); 
 
+    float* C_ref = allocate_matrix(A_rows, B_cols);
 
-    // test kernel
-    float* C_h = (float*) malloc(9 * sizeof(float)); 
-    // set up on-device variables
+    // establish ground truth
+  //  print_matrix(A, A_rows, A_cols);
+   // print_matrix(B, A_cols, B_cols);
+    mat_mul(A, B, C_ref, A_rows, A_cols, B_cols);
+    //print_matrix(C_ref, A_rows, B_cols);
+
+    // run kernel f
+    float* C_h_f = allocate_matrix(A_rows, B_cols);
+
     float* A_d;
-    float* B_d; 
-    float* C_d;
-    // allocate memory on device
-    cudaMalloc((void**) &A_d, 9 * sizeof(float));
-    cudaMalloc((void**) &B_d, 9 * sizeof(float));
-    cudaMalloc((void**) &C_d, 9 * sizeof(float));
-    // copy data from host to device
-    //      target, source, size, direction
-    cudaMemcpy(A_d, A, 9 * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(B_d, B, 9 * sizeof(float), cudaMemcpyHostToDevice);
-    // invoke kernel
-    mat_mul_knl_tiled<<<dim3(3, 3), dim3(1, 1)>>>(A_d, B_d, C_d, 3, 3, 3);
-    // waith for kernel to finish
-    cudaDeviceSynchronize();
-    // move data back to host}
-    cudaMemcpy(C_h, C_d, 9 * sizeof(float), cudaMemcpyDeviceToHost);
-    // free data on device
+    float* B_d;
+    float* C_d_f = allocate_matrix(A_rows, B_cols);
 
-    print_matrix(C, 3, 3);
-    print_matrix(C_h, 3, 3);
 
-    assert(matrices_are_equal(C, C_h, 3, 3, 3, 3));
+    cudaMalloc(&A_d, A_size);
+    cudaMalloc(&B_d, B_size); 
+    cudaMalloc(&C_d_f, C_size); 
+
+    cudaMemcpy(A_d, A, A_size, cudaMemcpyHostToDevice); 
+    cudaMemcpy(B_d, B, B_size, cudaMemcpyHostToDevice); 
+
+    time_t f_start = time(NULL);
+    f<<<dim3(A_rows, B_cols), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
+    cudaDeviceSynchronize(); 
+    time_t f_time = time(NULL) - f_start;
+
+    cudaMemcpy(C_h_f, C_d_f, C_size, cudaMemcpyDeviceToHost); 
+    cudaFree(C_d_f);
+
+    if (!matrices_are_equal(C_ref, C_h_f, A_rows, B_cols, A_rows, B_cols)) {
+        printf("kernel f is wrong!\n");
+    }
+    printf("f result: \n");
+//    print_matrix(C_h_f, A_rows, B_cols);
+
+    free(C_h_f);
+
+    // then knl g
+    float* C_h_g = allocate_matrix(A_rows, B_cols);
+    float* C_d_g= allocate_matrix(A_rows, B_cols);
+    cudaMalloc(&C_d_g, C_size);
+
+    time_t g_start = time(NULL);
+    g<<<dim3(1+ (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
+    cudaDeviceSynchronize(); 
+    time_t g_time = time(NULL) - g_start;
+
+    cudaMemcpy(C_h_g, C_d_g, C_size, cudaMemcpyDeviceToHost); 
+    if (!matrices_are_equal(C_ref, C_h_g, A_rows, B_cols, A_rows, B_cols)) {
+        printf("kernel g is wrong!\n");
+    }
+    cudaFree(C_d_g);
+    printf("g result: \n");
+//    print_matrix(C_h_g, A_rows, B_cols);
+    free(C_h_g);
+
+    printf("kernel f run time: %d\n", f_time);
+    printf("kernel g run time: %d\n", g_time);
     cudaFree(A_d);
     cudaFree(B_d);
-    cudaFree(C_d);
+    free(A);
+    free(B);
+    free(C_ref);
 }
+
+int main() {
+    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 102, 300, 102);
+}
+

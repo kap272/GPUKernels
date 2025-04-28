@@ -92,17 +92,13 @@ __global__ void mat_mul_knl_naive(float* A, float* B, float* C, int A_rows, int 
     }
 }
 
-#define TILE_WIDTH 3 
+#define TILE_WIDTH 16 
 __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols) {
     // like in the naive kernel, each thread will be responsible for a single element of C
     float C_val = 0.0;
     // each tile corresponds 1-1 to a block
     int row = blockIdx.y * TILE_WIDTH + threadIdx.y; 
     int col = blockIdx.x * TILE_WIDTH + threadIdx.x; 
-
-    if (row >= A_rows || col >= B_cols) {
-        return; 
-    }
 
     __shared__ float A_tile[TILE_WIDTH][TILE_WIDTH];
     __shared__ float B_tile[TILE_WIDTH][TILE_WIDTH];
@@ -117,13 +113,13 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
         A_tile_col =  k * TILE_WIDTH + threadIdx.x;
         B_tile_row =  TILE_WIDTH * k + threadIdx.y;
         // TODO: this should happen in a separate loop to cut down on ifs
-        if (A_tile_col < A_cols) {
+        if (row < A_rows && A_tile_col < A_cols) {
             A_tile[threadIdx.y][threadIdx.x] = A[row * A_cols + A_tile_col];
         } else {
             A_tile[threadIdx.y][threadIdx.x] = 0.0; 
         }
 
-        if (B_tile_row < A_cols) {
+        if (col < B_cols && B_tile_row < A_cols) {
             B_tile[threadIdx.y][threadIdx.x] = B[B_tile_row * B_cols + col];
         } else {
             B_tile[threadIdx.y][threadIdx.x] = 0.0; 
@@ -138,7 +134,9 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
         __syncthreads();
     } 
 
-    C[row * B_cols + col] = C_val;
+    if (row < A_rows && col < B_cols) {
+        C[row * B_cols + col] = C_val;
+    }
 }
 
 
@@ -221,6 +219,6 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
 }
 
 int main() {
-    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 102, 300, 102);
+    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 34, 35, 40);
 }
 

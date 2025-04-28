@@ -139,8 +139,27 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
     }
 }
 
+void transpose(float* A, float* A_t, int rows, int cols) {
+    // A_t[j][i] := A[i][j]
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            A_t[j * cols + i] = A[i * rows + j];
+        }
+    }
+}
+
+__global__ void transpose_knl_naive(float* A, float* A_t, int rows, int cols) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < rows && col < cols) {
+        A_t[col * cols + row] = A[row * rows + col];
+    }
+}
 
 typedef void (*mat_mul_func)(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols); 
+
+typedef void (*transpose_func)(float* A, float* A_t, int rows, int cols); 
 
 void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_cols, int B_cols) {
     int A_size = sizeof(float) * A_rows * A_cols;
@@ -175,7 +194,7 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     cudaMemcpy(B_d, B, B_size, cudaMemcpyHostToDevice); 
 
     time_t f_start = time(NULL);
-    f<<<dim3(A_rows, B_cols), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
+    f<<<dim3(1 + (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
     cudaDeviceSynchronize(); 
     time_t f_time = time(NULL) - f_start;
 
@@ -195,8 +214,9 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     float* C_d_g= allocate_matrix(A_rows, B_cols);
     cudaMalloc(&C_d_g, C_size);
 
+    // TODO fix timing
     time_t g_start = time(NULL);
-    g<<<dim3(1+ (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
+    g<<<dim3(1 + (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
     cudaDeviceSynchronize(); 
     time_t g_time = time(NULL) - g_start;
 
@@ -220,5 +240,31 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
 
 int main() {
     compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 34, 35, 40);
+
+    int A_size = 9 * sizeof(float);
+    float A[9] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
+    float* A_t = allocate_matrix(3, 3);
+
+    transpose(A, A_t, 3, 3);
+
+    float* A_d;
+    float* A_t_h = allocate_matrix(3, 3);
+    float* A_t_d = allocate_matrix(3, 3);
+
+    cudaMalloc(&A_t_d, 9 * sizeof(float));
+    cudaMalloc(&A_d, 9 * sizeof(float));
+
+    cudaMemcpy(A_d, A, A_size, cudaMemcpyHostToDevice); 
+
+    transpose_knl_naive<<<dim3(3, 3), dim3(1, 1)>>>(A_d, A_t_d, 3, 3);
+    cudaDeviceSynchronize();
+    cudaMemcpy(A_t_h, A_t_d, A_size, cudaMemcpyDeviceToHost); 
+
+
+    assert(matrices_are_equal(A_t, A_t_h, 3, 3, 3, 3));
+
+    
+
+
 }
 

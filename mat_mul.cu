@@ -160,6 +160,7 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     mat_mul(A, B, C_ref, A_rows, A_cols, B_cols);
     //print_matrix(C_ref, A_rows, B_cols);
 
+
     // run kernel f
     float* C_h_f = allocate_matrix(A_rows, B_cols);
 

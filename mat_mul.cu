@@ -139,7 +139,8 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
         }
 
         if (col < B_cols && B_tile_row < A_cols) {
-            B_tile[threadIdx.y][threadIdx.x] = B[B_tile_row * B_cols + col];
+//            B_tile[threadIdx.y][threadIdx.x] = B[B_tile_row * B_cols + col];
+            B_tile[threadIdx.y][threadIdx.x] = B[(TILE_WIDTH * k + threadIdx.y) * B_cols + col];
         } else {
             B_tile[threadIdx.y][threadIdx.x] = 0.0; 
         }
@@ -158,15 +159,12 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
     }
 }
 
-__device__ void mat_mul_knl_tiled_coalesced(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols) {
-
-}
 
 typedef void (*mat_mul_func)(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols); 
 
 typedef void (*transpose_func)(float* A, float* A_t, int rows, int cols); 
 
-void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_cols, int B_cols) {
+void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_cols, int B_cols, bool print_results) {
     int A_size = sizeof(float) * A_rows * A_cols;
     int B_size = sizeof(float) * A_cols * B_cols;
     int C_size = sizeof(float) * A_rows * B_cols;
@@ -216,8 +214,10 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     if (!matrices_are_equal(C_ref, C_h_f, A_rows, B_cols, A_rows, B_cols)) {
         printf("kernel f is wrong!\n");
     }
-//    printf("f result: \n");
-//    print_matrix(C_h_f, A_rows, B_cols);
+    if (print_results) {
+        printf("f result: \n");
+        print_matrix(C_h_f, A_rows, B_cols);
+    }
 
     free(C_h_f);
 
@@ -245,9 +245,10 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
         printf("kernel g is wrong!\n");
     }
     cudaFree(C_d_g);
-//    printf("g result: \n");
-//    print_matrix(C_h_g, A_rows, B_cols);
-    free(C_h_g);
+    if (print_results) {
+        printf("g result: \n");
+        print_matrix(C_h_g, A_rows, B_cols);
+    }
 
     printf("kernel f run time: %f\n", f_time);
     printf("kernel g run time: %f\n", g_time);
@@ -284,7 +285,6 @@ void compare_transpose_kernels(transpose_func f, transpose_func g, int rows, int
     
     // TODO: a better way to determine kernel launch dimensions
     f<<<dim3(1 + (rows/TILE_WIDTH), 1 + (cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, A_T_d_f, rows, cols);
-    printf("here\n");
     
     cudaEventRecord(f_stop, 0);
     cudaDeviceSynchronize();
@@ -336,7 +336,7 @@ void compare_transpose_kernels(transpose_func f, transpose_func g, int rows, int
 }
 
 int main() {
-    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 1024, 1024, 1024);
-    compare_transpose_kernels(transpose_knl_naive, transpose_knl_naive, 1024, 1024);
+    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 1024, 1024, 1024, false);
+//    compare_transpose_kernels(transpose_knl_naive, transpose_knl_naive, 1024, 1024);
 }
 

@@ -1,5 +1,6 @@
 //nvcc mat_mul.cu -o main && ./main
 
+// TODO: test different tile shapes and sizes 
 #define TILE_WIDTH 16 
 #include <stdio.h>
 #include <assert.h>
@@ -134,6 +135,7 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
         // TODO: this should happen in a separate loop to cut down on ifs
         if (row < A_rows && A_tile_col < A_cols) {
             A_tile[threadIdx.y][threadIdx.x] = A[row * A_cols + A_tile_col];
+
         } else {
             A_tile[threadIdx.y][threadIdx.x] = 0.0; 
         }

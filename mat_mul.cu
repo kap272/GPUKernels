@@ -1,7 +1,7 @@
 //nvcc mat_mul.cu -o main && ./main
 
 // TODO: test different tile shapes and sizes 
-#define TILE_WIDTH 16 
+#define TILE_WIDTH 32
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -141,7 +141,6 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
         }
 
         if (col < B_cols && B_tile_row < A_cols) {
-//            B_tile[threadIdx.y][threadIdx.x] = B[B_tile_row * B_cols + col];
             B_tile[threadIdx.y][threadIdx.x] = B[(TILE_WIDTH * k + threadIdx.y) * B_cols + col];
         } else {
             B_tile[threadIdx.y][threadIdx.x] = 0.0; 
@@ -162,11 +161,78 @@ __global__ void mat_mul_knl_tiled(float* A, float* B, float* C, int A_rows, int 
 }
 
 
+__global__ void mat_mul_knl_warp_shuffle(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols) {
+    int row = blockIdx.y * 4 + threadIdx.y;
+    int col = blockIdx.x * 4 + threadIdx.x;
+    int lane_id = threadIdx.x & 0x1f;
+
+    if (row >= A_rows || col >= B_cols) {
+        return;
+    }
+
+    float C_val = 0.0f;
+
+    for (int k = 0; k < A_cols; k += 32) {
+        float A_val = A[row * A_cols + (k + lane_id)];
+
+        for (int i = 0; i < 32 && (k + i) < A_cols; ++i) {
+            float A_i = __shfl_sync(0xffffffff, A_val, i); 
+            float B_val = B[(k + i) * B_cols + col];       
+            C_val += A_i * B_val;
+        }
+    }
+    C[row * B_cols + col] = C_val;
+}
+
+__global__ void mat_mul_knl_warp_shuffle_multi_cell(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols) {
+    // each thread now has a neighborhood of responsibility
+
+    // top left corner of the nbhd
+    int row = blockIdx.y * 4 + threadIdx.y;
+    int col = blockIdx.x * 4 + threadIdx.x;
+
+    int lane_id = threadIdx.x & 0x1f;
+
+    // have 32 threads in this warp
+    // threads in this warp can share info w shuffle APIs
+    // set up a 4 by 4 "tile" for each input 
+
+    float A_val = 0.0;
+    float B_val = 0.0;
+    float C_tile[4][4] = {0};
+    for (int k = 0; k < A_cols/4; k++) { // assume perfect divisibility for now
+        if (lane_id < 16) {
+            // TODO: would it make sense to hard code maps from lane ids to indices and back?
+            A_val = A[(row + lane_id/4) * A_cols + lane_id%4];
+        } 
+
+        if (lane_id >= 16) {
+            B_val = B[((k * 4) + lane_id - 16) * B_cols + (lane_id)%4]; 
+        }
+
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                for (int l = 0; l < 4; l++) {
+                    C_tile[i][j] += __shfl_sync(0xffffffff, A_val, 4 * i + l) * __shfl_sync(0xffffffff, B_val, 16 + 4 * l + j);                    }
+                }
+            }
+        }
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            C[(row + i) * B_cols + col + j] += C_tile[i][j];
+        }
+    }
+}
+
+
+
+
 typedef void (*mat_mul_func)(float* A, float* B, float* C, int A_rows, int A_cols, int B_cols); 
 
 typedef void (*transpose_func)(float* A, float* A_t, int rows, int cols); 
 
-void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_cols, int B_cols, bool print_results) {
+void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_cols, int B_cols, bool print_results, dim3 f_grid_dims, dim3 f_block_dims, dim3 g_grid_dims, dim3 g_block_dims) {
     int A_size = sizeof(float) * A_rows * A_cols;
     int B_size = sizeof(float) * A_cols * B_cols;
     int C_size = sizeof(float) * A_rows * B_cols;
@@ -204,7 +270,8 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     cudaEventRecord(f_start, 0);
 
     // TODO: a better way to determine kernel launch dimensions
-    f<<<dim3(1 + (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
+//    f<<<dim3(1 + (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
+    f<<<f_grid_dims, f_block_dims>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
     
     cudaEventRecord(f_stop, 0);
     cudaDeviceSynchronize();
@@ -236,7 +303,8 @@ void compare_mat_mul_kernels(mat_mul_func f, mat_mul_func g, int A_rows, int A_c
     cudaEventRecord(g_start, 0);
 
     // TODO: a better way to determine kernel launch dimensions
-    g<<<dim3(1 + (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
+//    g<<<dim3(1 + (A_rows/TILE_WIDTH), 1 + (B_cols/TILE_WIDTH)), dim3(TILE_WIDTH, TILE_WIDTH)>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
+    g<<<g_grid_dims, g_block_dims>>>(A_d, B_d, C_d_g, A_rows, A_cols, B_cols);
 
     cudaEventRecord(g_stop, 0);
     cudaDeviceSynchronize();
@@ -331,14 +399,19 @@ void compare_transpose_kernels(transpose_func f, transpose_func g, int rows, int
     free(A_T_h_g);
 
     printf("kernel f run time: %f\n", f_time);
-    printf("kernel g run time: %f\n", g_time);
+    printf("kernel g run time: %f\n \n", g_time);
     cudaFree(A_d);
     free(A);
     free(A_T_ref);
 }
 
 int main() {
-    compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, 1024, 1024, 1024, false);
-//    compare_transpose_kernels(transpose_knl_naive, transpose_knl_naive, 1024, 1024);
+    int m = 256;
+    for (int i = 0; i < 5; i++){
+//        compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, m, m, m, false);
+        compare_mat_mul_kernels(mat_mul_knl_tiled, mat_mul_knl_warp_shuffle_multi_cell, m, m, m, false, dim3(m/32, m/32), dim3(32, 32), dim3(m/4, m/4), dim3(4, 4));
+        printf("\n");
+    }
 }
+//    compare_transpose_kernels(transpose_knl_naive, transpose_knl_naive, 1024, 1024);
 

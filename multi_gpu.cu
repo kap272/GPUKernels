@@ -67,9 +67,9 @@ __global__ void mat_mul_knl_naive(float* A, float* B, float* C, int A_rows, int 
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
     int gpu_count;
-    bool print_results = true ;
+    bool print_results = false;
     cudaError_t err = cudaGetDeviceCount(&gpu_count);
     if (err != cudaSuccess) {
         printf("failed to count gpus; "); printf(cudaGetErrorString(err));
@@ -77,9 +77,24 @@ int main() {
     printf("found %d GPUs\n", gpu_count);
     printf("hello world\n");
 
-    int A_rows = 3;
-    int A_cols = 3;
-    int B_cols = 3;
+    for (int i = 0; i < gpu_count; i++){
+        for (int j = 0; j < gpu_count; j++){
+            if (i != j) {
+                int can_connect = 0;
+                cudaDeviceCanAccessPeer(&can_connect, i, j);
+                if (can_connect){
+                    printf("can connect gpus %d and %d as peers \n", i, j);
+                } else {
+                    printf("cannot connect gpus %d and %d as peers \n", i, j);
+                }
+            }
+        }
+    }
+
+
+    int A_rows = atoi(argv[1]);
+    int A_cols = atoi(argv[2]);
+    int B_cols = atoi(argv[3]);
 
     int A_size = sizeof(float) * A_rows * A_cols;
     int B_size = sizeof(float) * A_cols * B_cols;
@@ -98,6 +113,28 @@ int main() {
 
 
     // run kernel f
+    int N0 = A_cols/2;
+    int N1 = A_cols - N0;
+
+    float *A0_d=nullptr, *B0_d=nullptr, *C0_d=nullptr;
+    float *A1_d=nullptr, *B1_d=nullptr, *C1_d=nullptr;
+
+
+    cudaSetDevice(0);
+    cudaMalloc(&A0_d, sizeof(float)* A_rows * A_cols);
+    cudaMalloc(&B0_d, sizeof(float)* B_cols * N0);
+    cudaMalloc(&C0_d, sizeof(float) * A_rows * N0);
+    cudaMemcpy(A0_d, A, sizeof(float) * A_rows * B_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(B0_d, B, sizeof(float) * B_cols * N0, cudaMemcpyHostToDevice);
+
+    cudaSetDevice(1);
+    cudaMalloc(&A1_d, sizeof(float)* A_rows * A_cols);
+    cudaMalloc(&B1_d, sizeof(float)* B_cols * N0);
+    cudaMalloc(&C1_d, sizeof(float)* A_rows * N0);
+    cudaMemcpy(A1_d, A, sizeof(float)*A_rows*A_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(B1_d, B + (size_t) B_cols * N0, sizeof(float)*B_cols*N1, cudaMemcpyHostToDevice);
+
+
     float* C_h_f = allocate_matrix(A_rows, B_cols);
 
     float* A_d;
@@ -117,8 +154,9 @@ int main() {
     cudaEventCreate(&f_stop);
     cudaEventRecord(f_start, 0);
 
-    dim3 f_grid_dims(3, 3);
-    dim3 f_block_dims(1, 1);
+    int block_width = 16;
+    dim3 f_grid_dims(1 + A_cols/block_width, 1 + A_rows/block_width);
+    dim3 f_block_dims(block_width, block_width);
 
     mat_mul_knl_naive<<<f_grid_dims, f_block_dims>>>(A_d, B_d, C_d_f, A_rows, A_cols, B_cols);
     

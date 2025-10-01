@@ -1,5 +1,6 @@
 //nvcc mat_mul.cu -o main && ./main
 
+
 // TODO: test different tile shapes and sizes 
 #define TILE_WIDTH 32
 #include <stdio.h>
@@ -409,7 +410,7 @@ int main() {
     int m = 256;
     for (int i = 0; i < 5; i++){
 //        compare_mat_mul_kernels(mat_mul_knl_naive, mat_mul_knl_tiled, m, m, m, false);
-        compare_mat_mul_kernels(mat_mul_knl_tiled, mat_mul_knl_warp_shuffle_multi_cell, m, m, m, false, dim3(m/32, m/32), dim3(32, 32), dim3(m/4, m/4), dim3(4, 4));
+        compare_mat_mul_kernels(mat_mul_knl_tiled, mat_mul_knl_warp_shuffle_multi_cell, m, m, m, true, dim3(m/32, m/32), dim3(32, 32), dim3(m/4, m/4), dim3(4, 4));
         printf("\n");
     }
 }
